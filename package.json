@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "ionic:build:before": "chmod +x ./scripts/appflow-build.sh && ./scripts/appflow-build.sh",
+    "prebuild": "chmod +x ./scripts/appflow-build.sh && ./scripts/appflow-build.sh",
     "build": "mkdir -p downloads && echo '<html><body>Build Complete</body></html>' > downloads/index.html"
   },
   "dependencies": {
