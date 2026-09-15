@@ -1,0 +1,8 @@
+{
+  "name": "ionic-appflow-torrent-pipeline",
+  "version": "1.0.0",
+  "scripts": {
+    "ionic:build:before": "chmod +x ./scripts/appflow-build.sh && ./scripts/appflow-build.sh",
+    "build": "echo 'Build script finished successfully.'"
+  }
+}
