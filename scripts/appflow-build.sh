@@ -3,8 +3,8 @@ set -e
 
 echo "📦 [1/5] Installing dependencies..."
 if command -v apt-get &> /dev/null; then
-  sudo apt-get update
-  sudo apt-get install -y p7zip-full aria2 python3 python3-requests python3-pip curl
+   apt-get update
+   apt-get install -y p7zip-full aria2 python3 python3-requests python3-pip curl
 elif command -v brew &> /dev/null; then
   brew update
   brew install p7zip aria2 python
