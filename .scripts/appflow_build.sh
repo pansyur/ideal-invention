@@ -68,8 +68,7 @@ async def download_torrent(torrent_file, sem, max_retries=3):
             print(f"📥 [Attempt {attempt}/{max_retries}] Starting: {torrent_file}")
             cmd = [
                 "aria2c",
-                "--console-log-level=warn",
-                "--summary-interval=0",
+                "--summary-interval=20",
                 "--dir=downloads",
                 "--seed-time=0",
                 "--bt-stop-timeout=60",
