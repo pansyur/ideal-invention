@@ -4,10 +4,10 @@ set -e
 echo "📦 [1/5] Installing dependencies..."
 if command -v apt-get &> /dev/null; then
     apt-get update -qq
-    apt-get install -y -qq p7zip-full python3 python3-libtorrent python3-requests python3-pip curl
+    apt-get install -y -qq p7zip-full python3 python3-requests python3-pip curl qbittorrent-nox
 elif command -v brew &> /dev/null; then
-  brew update
-  brew install p7zip python
+    brew update
+    brew install p7zip python qbittorrent-cli
 fi
 
 python3 -m pip install --no-cache-dir --break-system-packages magnet2torrent requests natsort || pip3 install magnet2torrent requests natsort
@@ -66,113 +66,154 @@ async def main():
 asyncio.run(main())
 EOF
 
-echo "🚀 [3/5] Starting concurrent libtorrent downloads (Up to 10 at a time)..."
+echo "🚀 [3/5] Starting qbittorrent-nox & downloading files..."
 python3 - << 'EOF'
 import os
 import glob
 import time
-import libtorrent as lt
+import subprocess
+import requests
 
-def main():
-    torrent_files = glob.glob("torrents/*.torrent")
-    magnet_files = glob.glob("torrents/*.magnet")
+DOWNLOAD_DIR = os.path.abspath("downloads")
+TORRENT_DIR = os.path.abspath("torrents")
+QBT_URL = "http://127.0.0.1:8080"
 
-    if not torrent_files and not magnet_files:
-        print("⚠️ No torrent or magnet files found to download.")
-        return
+# 1. Generate qBittorrent configuration to bypass WebUI auth on localhost
+config_dir = os.path.expanduser("~/.config/qBittorrent")
+os.makedirs(config_dir, exist_ok=True)
+config_file = os.path.join(config_dir, "qBittorrent.conf")
 
-    os.makedirs("downloads", exist_ok=True)
+config_content = f"""[LegalNotice]
+Accepted=true
 
-    # Configure Libtorrent session settings with max 10 active downloads
-    settings = {
-        'listen_interfaces': '0.0.0.0:6881',
-        'enable_dht': True,
-        'active_downloads': 10,   # Up to 10 active downloads at once
-        'active_limit': 15        # Total active limit
-    }
-    
-    ses = lt.session(settings)
-    ses.add_dht_router("router.bittorrent.com", 6881)
-    ses.add_dht_router("router.opentrackr.org", 1337)
-    ses.add_dht_router("tracker.torrent.eu.org", 451)
+[Preferences]
+Downloads\\SavePath={DOWNLOAD_DIR}
+WebUI\\Port=8080
+WebUI\\LocalHostAuth=false
+WebUI\\AuthSubnetWhitelist=127.0.0.1/32
+WebUI\\AuthSubnetWhitelistEnabled=true
+Queueing\\QueueingEnabled=false
+"""
 
-    handles = []
-    completed_list = []
+with open(config_file, "w") as f:
+    f.write(config_content)
 
-    # 1. Add standard .torrent files
-    for t_file in torrent_files:
-        try:
-            info = lt.torrent_info(t_file)
-            h = ses.add_torrent({'ti': info, 'save_path': './downloads'})
-            handles.append(h)
-            print(f"🧲 Added torrent file: {t_file}")
-        except Exception as e:
-            print(f"❌ Failed to load {t_file}: {e}")
+# 2. Start qbittorrent-nox daemon
+print("🚀 Launching qbittorrent-nox daemon...")
+qbt_proc = subprocess.Popen(["qbittorrent-nox"])
 
-    # 2. Add raw magnet link fallbacks
-    for m_file in magnet_files:
-        try:
-            with open(m_file, 'r') as mf:
-                magnet_uri = mf.read().strip()
-            if magnet_uri:
-                params = lt.parse_magnet_uri(magnet_uri)
-                params.save_path = './downloads'
-                h = ses.add_torrent(params)
-                handles.append(h)
-                print(f"🧲 Added raw magnet fallback: {m_file}")
-        except Exception as e:
-            print(f"❌ Failed to parse magnet URI from {m_file}: {e}")
+# Wait for WebUI to be ready
+connected = False
+for _ in range(20):
+    try:
+        res = requests.get(f"{QBT_URL}/api/v2/app/version", timeout=2)
+        if res.status_code == 200:
+            print(f"✅ Connected to qBittorrent WebUI v{res.text.strip()}")
+            connected = True
+            break
+    except Exception:
+        time.sleep(1)
 
-    if not handles:
-        print("⚠️ No valid torrent handles created.")
-        return
+if not connected:
+    print("❌ Failed to start or connect to qbittorrent-nox.")
+    qbt_proc.terminate()
+    exit(1)
 
-    print("\n🚀 Monitoring libtorrent downloads...")
-    active = list(handles)
+# 3. Queue Torrents & Magnets into qBittorrent
+torrent_files = glob.glob(os.path.join(TORRENT_DIR, "*.torrent"))
+magnet_files = glob.glob(os.path.join(TORRENT_DIR, "*.magnet"))
 
-    while active:
-        for h in active[:]:
-            s = h.status()
-            if h.is_seed() or s.progress >= 1.0:
-                name = h.name() or "Unknown Torrent"
-                print(f"✅ Finished: {name}", flush=True)
-                completed_list.append(name)
-                active.remove(h)
-            else:
-                if s.has_metadata:
-                    rate = s.download_rate  # Bytes per second
-                    progress_pct = s.progress * 100
-                    
-                    if rate > 0:
-                        remaining_bytes = s.total_wanted - s.total_wanted_done
-                        if remaining_bytes < 0: remaining_bytes = 0
-                        eta_sec = int(remaining_bytes / rate)
-                        m, s_sec = divmod(eta_sec, 60)
-                        h_hr, m = divmod(m, 60)
-                        eta_str = f"{h_hr:02d}:{m:02d}:{s_sec:02d}" if h_hr > 0 else f"{m:02d}:{s_sec:02d}"
-                    else:
-                        eta_str = "Calculating..."
-                    
-                    print(
-                        f"📊 Progress [{h.name()[:30]}]: {progress_pct:.2f}% | "
-                        f"Down: {rate / 1024:.1f} KB/s | Peers: {s.num_peers} | ETA: {eta_str}",
-                        flush=True
-                    )
-                else:
-                    print(f"⏳ Fetching metadata for magnet fallback...", flush=True)
+if not torrent_files and not magnet_files:
+    print("⚠️ No torrent or magnet files found to download.")
+    requests.post(f"{QBT_URL}/api/v2/app/shutdown")
+    exit(0)
 
-        if active:
-            time.sleep(5)
+for t_file in torrent_files:
+    try:
+        with open(t_file, 'rb') as f:
+            requests.post(
+                f"{QBT_URL}/api/v2/torrents/add",
+                files={'torrents': f},
+                data={'savepath': DOWNLOAD_DIR}
+            )
+        print(f"🧲 Added torrent file: {os.path.basename(t_file)}")
+    except Exception as e:
+        print(f"❌ Failed to add {t_file}: {e}")
 
-    print("\n====================")
-    print("🎉 FINISHED ALL LIBTORRENT DOWNLOADS:")
-    print("====================")
-    for item in completed_list:
-        print(f"✅ {item}")
-    print("====================\n")
+for m_file in magnet_files:
+    try:
+        with open(m_file, 'r') as mf:
+            magnet_uri = mf.read().strip()
+        if magnet_uri:
+            requests.post(
+                f"{QBT_URL}/api/v2/torrents/add",
+                data={'urls': magnet_uri, 'savepath': DOWNLOAD_DIR}
+            )
+            print(f"🧲 Added magnet fallback: {os.path.basename(m_file)}")
+    except Exception as e:
+        print(f"❌ Failed to parse magnet from {m_file}: {e}")
 
-if __name__ == "__main__":
-    main()
+# 4. Monitor Downloads via Web API
+print("\n🚀 Monitoring qBittorrent downloads...")
+
+def format_eta(seconds):
+    if seconds <= 0 or seconds >= 8640000:
+        return "Calculating..."
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+while True:
+    try:
+        info_res = requests.get(f"{QBT_URL}/api/v2/torrents/info", timeout=5)
+        torrents = info_res.json()
+    except Exception as e:
+        print(f"⚠️ Error fetching torrent status: {e}")
+        time.sleep(5)
+        continue
+
+    if not torrents:
+        print("⏳ Waiting for torrents to initialize in queue...")
+        time.sleep(3)
+        continue
+
+    all_completed = True
+    for t in torrents:
+        name = t.get("name", "Unknown Torrent")
+        progress = t.get("progress", 0) * 100
+        state = t.get("state", "")
+        dl_speed = t.get("dlspeed", 0) / 1024  # KB/s
+        num_seeds = t.get("num_seeds", 0)
+        eta = t.get("eta", 8640000)
+
+        # Check if completed/seeding
+        is_done = progress >= 100.0 or state in ["uploading", "stalledUP", "pausedUP", "queuedUP", "completed"]
+
+        if not is_done:
+            all_completed = False
+            print(
+                f"📊 Progress [{name[:30]}]: {progress:.2f}% | "
+                f"Down: {dl_speed:.1f} KB/s | Seeds: {num_seeds} | ETA: {format_eta(eta)}",
+                flush=True
+            )
+
+    if all_completed:
+        print("\n====================")
+        print("🎉 FINISHED ALL QBITTORRENT DOWNLOADS:")
+        print("====================")
+        for t in torrents:
+            print(f"✅ {t.get('name')}")
+        print("====================\n")
+        break
+
+    time.sleep(5)
+
+# 5. Clean Shutdown
+print("🛑 Stopping qbittorrent-nox...")
+try:
+    requests.post(f"{QBT_URL}/api/v2/app/shutdown", timeout=5)
+except Exception:
+    qbt_proc.terminate()
 EOF
 
 echo "📦 [4/5] Running Smart Auto-Group Independent Zipping..."
