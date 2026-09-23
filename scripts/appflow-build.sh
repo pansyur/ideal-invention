@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
-echo "📦 [1/5] Installing dependencies..."
-if command -v apt-get &> /dev/null; then
-    apt-get update -qq
-    apt-get install -y -qq p7zip-full python3 python3-libtorrent python3-requests python3-pip curl
-elif command -v brew &> /dev/null; then
-  brew update
-  brew install p7zip python
+echo "📦 [1/5] Installing macOS dependencies via Homebrew..."
+
+# Check for Homebrew (standard on macOS CI runners like Appflow / Bitrise)
+if command -v brew &> /dev/null; then
+    brew update --quiet
+    brew install p7zip python libtorrent-rasterbar curl || true
+else
+    echo "⚠️ Homebrew not found. Proceeding with system tools..."
 fi
 
-python3 -m pip install --no-cache-dir --break-system-packages magnet2torrent requests natsort || pip3 install magnet2torrent requests natsort
+# Upgrade pip and install required Python libraries without sudo
+python3 -m pip install --upgrade pip --quiet
+python3 -m pip install --no-cache-dir magnet2torrent requests natsort libtorrent || true
 
 echo "🧲 [2/5] Converting magnets to torrents via magnet2torrent..."
 mkdir -p downloads torrents
