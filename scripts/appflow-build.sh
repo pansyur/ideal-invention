@@ -43,7 +43,10 @@ async def main():
                             f.write(torrent_data)
                         print(f"✅ Saved torrent: {torrent_path}")
                     except Exception as e:
-                        print(f"⚠️ Magnet conversion failed ({e}). Skipped.")
+                        fallback_path = os.path.join("torrents", f"fallback_{i}.magnet")
+                        with open(fallback_path, "w") as mf:
+                            mf.write(link)
+                        print(f"⚠️ Magnet conversion failed ({e}). Queuing raw magnet fallback: {fallback_path}")
                 elif link.startswith('http'):
                     try:
                         tor_data = requests.get(link, timeout=15).content
@@ -71,9 +74,11 @@ import time
 import libtorrent as lt
 
 def main():
-    torrents = glob.glob("torrents/*.torrent")
-    if not torrents:
-        print("⚠️ No torrent files found to download.")
+    torrent_files = glob.glob("torrents/*.torrent")
+    magnet_files = glob.glob("torrents/*.magnet")
+
+    if not torrent_files and not magnet_files:
+        print("⚠️ No torrent or magnet files found to download.")
         return
 
     os.makedirs("downloads", exist_ok=True)
@@ -94,14 +99,29 @@ def main():
     handles = []
     completed_list = []
 
-    for t_file in torrents:
+    # 1. Add standard .torrent files
+    for t_file in torrent_files:
         try:
             info = lt.torrent_info(t_file)
             h = ses.add_torrent({'ti': info, 'save_path': './downloads'})
             handles.append(h)
-            print(f"🧲 Added to libtorrent queue: {t_file}")
+            print(f"🧲 Added torrent file: {t_file}")
         except Exception as e:
             print(f"❌ Failed to load {t_file}: {e}")
+
+    # 2. Add raw magnet link fallbacks
+    for m_file in magnet_files:
+        try:
+            with open(m_file, 'r') as mf:
+                magnet_uri = mf.read().strip()
+            if magnet_uri:
+                params = lt.parse_magnet_uri(magnet_uri)
+                params.save_path = './downloads'
+                h = ses.add_torrent(params)
+                handles.append(h)
+                print(f"🧲 Added raw magnet fallback: {m_file}")
+        except Exception as e:
+            print(f"❌ Failed to parse magnet URI from {m_file}: {e}")
 
     if not handles:
         print("⚠️ No valid torrent handles created.")
@@ -139,7 +159,7 @@ def main():
                         flush=True
                     )
                 else:
-                    print(f"⏳ Downloading metadata for torrent...", flush=True)
+                    print(f"⏳ Fetching metadata for magnet fallback...", flush=True)
 
         if active:
             time.sleep(5)
