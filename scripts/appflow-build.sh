@@ -21,7 +21,7 @@ import requests
 from urllib.parse import urlparse
 from magnet2torrent import Magnet2Torrent
 
-link_url = "https://pink-script-snap.lovable.app/api/public/page/aaca78c9-95d1-4dc2-9aab-9acfa607c586.txt"
+link_url = "https://pink-script-snap.lovable.app/api/public/page/b0b7eba2-8a28-4cca-bae0-6012416821d6.txt"
 
 async def main():
     try:
