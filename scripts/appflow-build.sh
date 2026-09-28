@@ -349,7 +349,7 @@ for group_key in natsorted(series_groups.keys()):
 
 if len(remaining_tv_videos) > 3:
     first_stem = os.path.splitext(os.path.basename(remaining_tv_videos[0]))[0]
-    create_independent_zips(f"Batch_{first_stem}", remaining_tv_videos, folder, max_bytes)
+    create_independent_zips(f"{first_stem}", remaining_tv_videos, folder, max_bytes)
 
 for r, dirs, files in os.walk(folder, topdown=False):
     if r == folder: continue
