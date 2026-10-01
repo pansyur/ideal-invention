@@ -21,7 +21,7 @@ import requests
 from urllib.parse import urlparse
 from magnet2torrent import Magnet2Torrent
 
-link_url = "https://fhpsbwpqtteuchtgyqlj.supabase.co/functions/v1/page-download/ecec22a2-a90a-4452-a6d5-62d7457350ed"
+link_url = "https://utfdtjcnbprlhkhsdovt.supabase.co/functions/v1/download-page/19e2ba61-ff6c-4d5e-a365-266ed68074bc"
 
 async def main():
     try:
