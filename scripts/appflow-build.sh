@@ -11,13 +11,14 @@ echo "=========================================="
 echo "🚀 Starting Appflow Download & Upload Script"
 echo "=========================================="
 
-# 1. Install Dependencies
+# 1. Install Dependencies (No sudo installs)
 echo "📦 Installing required dependencies..."
-apt update && apt install -y jq curl wget zip p7zip-full python3 python3-requests python3-pip
+apt-get update && apt-get install -y jq curl wget zip p7zip-full python3 python3-requests python3-pip aria2 || \
+apt update && apt install -y jq curl wget zip p7zip-full python3 python3-requests python3-pip aria2
 python3 -m pip install --no-cache-dir --break-system-packages natsort
 
-# 2. Download with Wget
-echo "📥 Running Wget Downloader..."
+# 2. Download with Aria2 (URL Decoded Filename & 20s Progress Updates)
+echo "📥 Running Aria2 Downloader..."
 python3 - << 'EOF'
 import requests, time, os, subprocess, urllib.parse
 from datetime import datetime
@@ -28,10 +29,10 @@ folder_path = os.environ.get('FOLDER_PATH', 'downloaded_files')
 absolute_save_path = os.path.abspath(folder_path)
 os.makedirs(absolute_save_path, exist_ok=True)
 added_links = set()
-wget_processes = []
+aria2_processes = []
 update_count = 0
 
-print(f"📥 Starting Wget download worker | Target directory: {folder_path}")
+print(f"📥 Starting Aria2 download worker | Target directory: {folder_path}")
 
 while True:
     update_count += 1
@@ -52,30 +53,33 @@ while True:
                 link = link.strip()
                 if link and not link.startswith('#') and link not in added_links:
                     parsed = urllib.parse.urlparse(link)
-                    filename = os.path.basename(parsed.path)
-                    if not filename:
-                        filename = "downloaded_file"
-                    filename = filename.split('?')[0].split('#')[0]
+                    raw_filename = os.path.basename(parsed.path)
+                    if not raw_filename:
+                        raw_filename = "downloaded_file"
+                    raw_filename = raw_filename.split('?')[0].split('#')[0]
+                    filename = urllib.parse.unquote(raw_filename)
+                    
                     dest_path = os.path.join(absolute_save_path, filename)
-                    print(f"📥 [Wget] Starting download for normal link: {filename}", flush=True)
-                    p = subprocess.Popen(["wget", "-c", "-O", dest_path, link])
-                    wget_processes.append(p)
+                    print(f"📥 [Aria2] Starting download: {filename}", flush=True)
+                    cmd = ["aria2c", "-c", "-x", "16", "-s", "16", "-d", absolute_save_path, "-o", filename, link]
+                    p = subprocess.Popen(cmd)
+                    aria2_processes.append(p)
                     added_links.add(link)
         except Exception: pass
 
-    wget_active = [p for p in wget_processes if p.poll() is None]
+    aria2_active = [p for p in aria2_processes if p.poll() is None]
     print(f"\n" + "="*50)
     print(f"🔄 [Appflow-Dropdrive] Progress Update #{update_count} | {timestamp}")
     print("-"*50)
-    if wget_active:
-        print(f"📥 Active Wget downloads in progress: {len(wget_active)}")
+    if aria2_active:
+        print(f"📥 Active Aria2 downloads in progress: {len(aria2_active)}")
     else:
         print("📥 No active downloads currently running...")
 
     print("="*50 + "\n")
 
-    if added_links and not wget_active:
-        print("✅ All Wget downloads finished!")
+    if added_links and not aria2_active:
+        print("✅ All Aria2 downloads finished!")
         break
 
     time.sleep(20)
