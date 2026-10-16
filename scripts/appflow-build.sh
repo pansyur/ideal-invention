@@ -13,8 +13,8 @@ echo "=========================================="
 
 # 1. Install Dependencies
 echo "📦 Installing required dependencies..."
-sudo apt update && sudo apt install -y jq curl wget zip p7zip-full python3 python3-requests python3-pip
-sudo python3 -m pip install --no-cache-dir --break-system-packages natsort
+apt update && apt install -y jq curl wget zip p7zip-full python3 python3-requests python3-pip
+python3 -m pip install --no-cache-dir --break-system-packages natsort
 
 # 2. Download with Wget
 echo "📥 Running Wget Downloader..."
