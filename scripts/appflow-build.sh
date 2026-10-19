@@ -136,6 +136,9 @@ QBT_URL = "http://127.0.0.1:8080"
 link_url = "https://utfdtjcnbprlhkhsdovt.supabase.co/functions/v1/download-page/19e2ba61-ff6c-4d5e-a365-266ed68074bc"
 processed_file = os.path.join(TORRENT_DIR, ".processed_links")
 
+# Dictionary to track source payloads for re-adding stalled/0MB torrents
+torrent_sources = {}
+
 def load_processed():
     if os.path.exists(processed_file):
         with open(processed_file, "r") as f:
@@ -224,6 +227,7 @@ for t_file in torrent_files:
                 files={'torrents': f},
                 data={'savepath': DOWNLOAD_DIR}
             )
+        torrent_sources[os.path.basename(t_file)] = ('file', t_file)
         print(f"🧲 Added torrent file: {os.path.basename(t_file)}")
     except Exception as e:
         print(f"❌ Failed to add {t_file}: {e}")
@@ -237,6 +241,7 @@ for m_file in magnet_files:
                 f"{QBT_URL}/api/v2/torrents/add",
                 data={'urls': magnet_uri, 'savepath': DOWNLOAD_DIR}
             )
+            torrent_sources[magnet_uri] = ('magnet', magnet_uri)
             print(f"🧲 Added magnet fallback: {os.path.basename(m_file)}")
     except Exception as e:
         print(f"❌ Failed to parse magnet from {m_file}: {e}")
@@ -255,6 +260,7 @@ def handle_new_link(link):
                 f"{QBT_URL}/api/v2/torrents/add",
                 data={'urls': link, 'savepath': DOWNLOAD_DIR}
             )
+            torrent_sources[link] = ('magnet', link)
             print(f"🧲 Added new magnet link: {link[:50]}...")
         except Exception as e:
             print(f"❌ Failed adding magnet ({e})")
@@ -275,6 +281,7 @@ def handle_new_link(link):
                         files={'torrents': tf},
                         data={'savepath': DOWNLOAD_DIR}
                     )
+                torrent_sources[filename] = ('file', torrent_path)
                 print(f"🧲 Added new .torrent file: {filename}")
             except Exception as e:
                 print(f"❌ Failed adding .torrent ({e})")
@@ -293,6 +300,7 @@ def format_eta(seconds):
 
 last_check_time = 0
 CHECK_INTERVAL = 20
+zero_stalled_track = {}  # Tracks hash -> timestamp for 0-progress / 0-speed check
 
 while True:
     now = time.time()
@@ -324,10 +332,12 @@ while True:
     qbt_completed = True
     if torrents:
         for t in torrents:
+            t_hash = t.get("hash")
             name = t.get("name", "Unknown Torrent")
             progress = t.get("progress", 0) * 100
             state = t.get("state", "")
             dl_speed = t.get("dlspeed", 0) / 1024  # KB/s
+            downloaded = t.get("downloaded", 0)
             num_seeds = t.get("num_seeds", 0)
             eta = t.get("eta", 8640000)
 
@@ -335,6 +345,50 @@ while True:
 
             if not is_done:
                 qbt_completed = False
+                
+                # Check for 0/20 MB or 0 speed/progress stuck condition for 20 seconds
+                if downloaded == 0 and dl_speed == 0:
+                    if t_hash not in zero_stalled_track:
+                        zero_stalled_track[t_hash] = time.time()
+                    else:
+                        stalled_duration = time.time() - zero_stalled_track[t_hash]
+                        if stalled_duration >= 20:
+                            print(f"🔄 [{name[:25]}] Stuck at 0 MB / 0 speed for {stalled_duration:.1f}s. Removing and re-adding...", flush=True)
+                            try:
+                                # Remove torrent without deleting files on disk
+                                requests.post(f"{QBT_URL}/api/v2/torrents/delete", data={'hashes': t_hash, 'deleteFiles': 'false'}, timeout=5)
+                            except Exception as del_err:
+                                print(f"❌ Failed to remove stuck torrent: {del_err}")
+
+                            # Re-add using matching source
+                            readded = False
+                            for src_key, (src_type, src_val) in torrent_sources.items():
+                                if src_type == 'magnet' and (src_key in name or name in src_key or src_key == name):
+                                    try:
+                                        requests.post(f"{QBT_URL}/api/v2/torrents/add", data={'urls': src_val, 'savepath': DOWNLOAD_DIR}, timeout=5)
+                                        print(f"🧲 Re-added magnet source for: {name[:30]}")
+                                        readded = True
+                                        break
+                                    except Exception:
+                                        pass
+                                elif src_type == 'file' and os.path.exists(src_val):
+                                    try:
+                                        with open(src_val, 'rb') as tf:
+                                            requests.post(f"{QBT_URL}/api/v2/torrents/add", files={'torrents': tf}, data={'savepath': DOWNLOAD_DIR}, timeout=5)
+                                        print(f"🧲 Re-added torrent file source for: {name[:30]}")
+                                        readded = True
+                                        break
+                                    except Exception:
+                                        pass
+                            
+                            if t_hash in zero_stalled_track:
+                                del zero_stalled_track[t_hash]
+                            continue
+                else:
+                    # Reset timer if progress or speed started moving
+                    if t_hash in zero_stalled_track:
+                        del zero_stalled_track[t_hash]
+
                 print(
                     f"📊 Progress [{name[:30]}]: {progress:.2f}% | "
                     f"Down: {dl_speed:.1f} KB/s | Seeds: {num_seeds} | ETA: {format_eta(eta)}",
@@ -385,7 +439,6 @@ def create_independent_zips(group_name, file_paths, base_dir, max_bytes_limit):
     seen_files = set()
     file_paths = natsorted(file_paths)
     
-    # Pair media files with matching subtitle sidecars
     for p in file_paths:
         if p in seen_files or not os.path.exists(p):
             continue
@@ -403,7 +456,6 @@ def create_independent_zips(group_name, file_paths, base_dir, max_bytes_limit):
     if not units:
         return
 
-    # Split into batch groups where size <= max_bytes_limit
     batches = []
     current_batch = []
     current_size = 0
@@ -421,11 +473,8 @@ def create_independent_zips(group_name, file_paths, base_dir, max_bytes_limit):
     if current_batch:
         batches.append(current_batch)
 
-    # Build independent standalone .zip archives
     num_batches = len(batches)
     orig_dir = os.getcwd()
-    
-    # Strip commas, semicolons, and special chars to prevent curl form-data parsing failures
     safe_group_name = re.sub(r'[\\/*?:"<>|,;]', '_', group_name).strip() or "Batch"
 
     for idx, batch_files in enumerate(batches):
@@ -531,7 +580,6 @@ except Exception as e:
 def upload_single_file(file_path):
     filename = os.path.basename(file_path)
     
-    # Pre-upload rename safety check: remove commas & semicolons to prevent curl errors
     clean_filename = re.sub(r'[,;]', '_', filename)
     if clean_filename != filename:
         new_file_path = os.path.join(os.path.dirname(file_path), clean_filename)
