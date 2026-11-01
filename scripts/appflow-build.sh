@@ -440,9 +440,12 @@ def upload_single_file(file_path):
 
 if os.path.exists(FOLDER_PATH):
     upload_queue = []
+    # Exclude temporary files and specified extension types (.txt, .jpg, .png, .nfo)
+    excluded_extensions = ('.txt', '.jpg', '.png', '.nfo', '.!qB', '.part', '.aria2')
+    
     for root, dirs, files in os.walk(FOLDER_PATH):
         for filename in files:
-            if not any(ext in filename for ext in [".!qB", ".part", ".aria2"]):
+            if not filename.lower().endswith(excluded_extensions):
                 upload_queue.append(os.path.join(root, filename))
     
     upload_queue = natsorted(upload_queue)
